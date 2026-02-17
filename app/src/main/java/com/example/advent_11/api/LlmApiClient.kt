@@ -1,6 +1,7 @@
 package com.example.advent_11.api
 
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -9,6 +10,27 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
+
+/**
+ * Параметры управления ответом LLM.
+ * @param maxTokens ограничение длины ответа в токенах
+ * @param stop последовательности, при встрече которых генерация останавливается
+ * @param temperature случайность (0–2), ниже = детерминированнее
+ * @param topP nucleus sampling (0–1)
+ * @param topK top-k sampling (некоторые API)
+ * @param formatInstruction инструкция формата ответа (добавляется в system message)
+ */
+data class ChatRequestParams(
+    val maxTokens: Int? = null,
+    val stop: List<String>? = null,
+    val temperature: Double? = null,
+    val topP: Double? = null,
+    val topK: Int? = null,
+    val frequencyPenalty: Double? = null,
+    val presencePenalty: Double? = null,
+    val seed: Int? = null,
+    val formatInstruction: String? = null
+)
 
 /**
  * Клиент для DeepSeek API (OpenAI-совместимый формат).
@@ -24,11 +46,29 @@ class LlmApiClient(
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun sendPrompt(prompt: String, model: String = "deepseek-chat"): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun sendPrompt(
+        prompt: String,
+        model: String = "deepseek-chat",
+        params: ChatRequestParams? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
+            val messages = buildList {
+                params?.formatInstruction?.let { instruction ->
+                    add(ChatRequest.ChatRequestMessage(role = "system", content = instruction))
+                }
+                add(ChatRequest.ChatRequestMessage(role = "user", content = prompt))
+            }
             val requestBody = ChatRequest(
                 model = model,
-                messages = listOf(ChatRequest.ChatRequestMessage(role = "user", content = prompt))
+                messages = messages,
+                maxTokens = params?.maxTokens,
+                stop = params?.stop,
+                temperature = params?.temperature,
+                topP = params?.topP,
+                topK = params?.topK,
+                frequencyPenalty = params?.frequencyPenalty,
+                presencePenalty = params?.presencePenalty,
+                seed = params?.seed
             ).toJson()
 
             val request = Request.Builder()
@@ -62,7 +102,15 @@ class LlmApiClient(
 // DTO для запроса (OpenAI Chat Completions API)
 private data class ChatRequest(
     val model: String,
-    val messages: List<ChatRequestMessage>
+    val messages: List<ChatRequestMessage>,
+    @SerializedName("max_tokens") val maxTokens: Int? = null,
+    val stop: List<String>? = null,
+    val temperature: Double? = null,
+    @SerializedName("top_p") val topP: Double? = null,
+    @SerializedName("top_k") val topK: Int? = null,
+    @SerializedName("frequency_penalty") val frequencyPenalty: Double? = null,
+    @SerializedName("presence_penalty") val presencePenalty: Double? = null,
+    val seed: Int? = null
 ) {
     data class ChatRequestMessage(val role: String, val content: String)
 
