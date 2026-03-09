@@ -14,6 +14,7 @@ import com.example.advent_11.model.MessageStatus
 import com.example.advent_11.storage.ApiKeyStorage
 import com.example.advent_11.storage.LlmSettings
 import com.example.advent_11.storage.LlmSettingsStorage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.util.UUID
@@ -111,39 +112,47 @@ class ChatRepository(
         )
 
         val contextMessages = buildRequestMessages(settings, chatDao.getMessages(chatId))
-        return llmApiClient.sendMessages(
-            apiKey = apiKey,
-            messages = contextMessages,
-            model = settings.model,
-            params = settings.toChatRequestParams()
-        ).fold(
-            onSuccess = { answer ->
-                chatDao.updateMessage(
-                    assistantMessage.copy(
-                        content = answer,
-                        status = MessageStatus.SENT.value,
-                        errorMessage = null
+        return try {
+            llmApiClient.sendMessages(
+                apiKey = apiKey,
+                messages = contextMessages,
+                model = settings.model,
+                params = settings.toChatRequestParams()
+            ).fold(
+                onSuccess = { answer ->
+                    chatDao.updateMessage(
+                        assistantMessage.copy(
+                            content = answer,
+                            status = MessageStatus.SENT.value,
+                            errorMessage = null
+                        )
                     )
-                )
-                chatDao.updateChatThread(
-                    chatThread.copy(
-                        title = updatedTitle,
-                        model = settings.model,
-                        updatedAt = System.currentTimeMillis()
+                    chatDao.updateChatThread(
+                        chatThread.copy(
+                            title = updatedTitle,
+                            model = settings.model,
+                            updatedAt = System.currentTimeMillis()
+                        )
                     )
-                )
-                Result.success(Unit)
-            },
-            onFailure = { throwable ->
-                chatDao.updateMessage(
-                    assistantMessage.copy(
-                        status = MessageStatus.ERROR.value,
-                        errorMessage = throwable.message ?: "Не удалось получить ответ"
+                    Result.success(Unit)
+                },
+                onFailure = { throwable ->
+                    rollbackPendingMessage(
+                        chatThread = chatThread,
+                        userMessageId = userMessage.id,
+                        assistantMessageId = assistantMessage.id
                     )
-                )
-                Result.failure(throwable)
-            }
-        )
+                    Result.failure(throwable)
+                }
+            )
+        } catch (e: CancellationException) {
+            rollbackPendingMessage(
+                chatThread = chatThread,
+                userMessageId = userMessage.id,
+                assistantMessageId = assistantMessage.id
+            )
+            throw e
+        }
     }
 
     suspend fun retryMessage(chatId: String, messageId: String): Result<Unit> {
@@ -209,6 +218,15 @@ class ChatRepository(
     }
 
     private suspend fun nextSequence(chatId: String): Int = (chatDao.getMaxSequence(chatId) ?: -1) + 1
+
+    private suspend fun rollbackPendingMessage(
+        chatThread: ChatThreadEntity,
+        userMessageId: String,
+        assistantMessageId: String
+    ) {
+        chatDao.deleteMessages(listOf(userMessageId, assistantMessageId))
+        chatDao.updateChatThread(chatThread)
+    }
 
     private fun buildRequestMessages(settings: LlmSettings, messages: List<ChatMessageEntity>): List<LlmChatMessage> {
         val requestMessages = mutableListOf<LlmChatMessage>()

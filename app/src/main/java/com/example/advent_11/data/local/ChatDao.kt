@@ -64,6 +64,9 @@ interface ChatDao {
     @Query("SELECT MAX(sequence) FROM chat_messages WHERE chatId = :chatId")
     suspend fun getMaxSequence(chatId: String): Int?
 
+    @Query("DELETE FROM chat_messages WHERE id IN (:messageIds)")
+    suspend fun deleteMessages(messageIds: List<String>)
+
     @Query("DELETE FROM chat_threads WHERE id = :chatId")
     suspend fun deleteChat(chatId: String)
 }

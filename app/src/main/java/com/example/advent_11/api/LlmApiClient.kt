@@ -2,14 +2,21 @@ package com.example.advent_11.api
 
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import timber.log.Timber
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /**
  * Параметры управления ответом LLM.
@@ -75,25 +82,57 @@ class LlmApiClient(
                 .post(requestBody.toRequestBody(jsonMediaType))
                 .build()
 
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: ""
-
-            if (!response.isSuccessful) {
-                Timber.e("LlmApi ошибка: ${response.code} - $body")
-                return@withContext Result.failure(Exception("HTTP ${response.code}: $body"))
-            }
-
-            val chatResponse = ChatResponse.fromJson(body)
-            val content = chatResponse.choices.firstOrNull()?.message?.content
-                ?: return@withContext Result.failure(Exception("Пустой ответ от API"))
-
-            Timber.d("LlmApi ответ: $content")
-            Result.success(content.trim())
+            executeRequest(request)
+        } catch (e: CancellationException) {
+            Timber.i("LlmApi запрос отменен")
+            throw e
         } catch (e: Exception) {
             Timber.e(e, "LlmApi исключение")
             Result.failure(e)
         }
     }
+
+    private suspend fun executeRequest(request: Request): Result<String> =
+        suspendCancellableCoroutine { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation {
+                call.cancel()
+            }
+
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (!continuation.isActive) return
+                    continuation.resume(Result.failure(e))
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (!continuation.isActive) {
+                        response.close()
+                        return
+                    }
+
+                    response.use {
+                        val body = it.body?.string() ?: ""
+
+                        if (!it.isSuccessful) {
+                            Timber.e("LlmApi ошибка: ${it.code} - $body")
+                            continuation.resume(Result.failure(Exception("HTTP ${it.code}: $body")))
+                            return
+                        }
+
+                        val chatResponse = ChatResponse.fromJson(body)
+                        val content = chatResponse.choices.firstOrNull()?.message?.content
+                        if (content == null) {
+                            continuation.resume(Result.failure(Exception("Пустой ответ от API")))
+                            return
+                        }
+
+                        Timber.d("LlmApi ответ: $content")
+                        continuation.resume(Result.success(content.trim()))
+                    }
+                }
+            })
+        }
 }
 
 // DTO для запроса (OpenAI Chat Completions API)
