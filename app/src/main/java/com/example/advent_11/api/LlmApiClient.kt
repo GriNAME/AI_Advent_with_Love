@@ -13,12 +13,6 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Параметры управления ответом LLM.
- * @param maxTokens ограничение длины ответа в токенах
- * @param stop последовательности, при встрече которых генерация останавливается
- * @param temperature случайность (0–2), ниже = детерминированнее
- * @param topP nucleus sampling (0–1)
- * @param topK top-k sampling (некоторые API)
- * @param formatInstruction инструкция формата ответа (добавляется в system message)
  */
 data class ChatRequestParams(
     val maxTokens: Int? = null,
@@ -32,11 +26,15 @@ data class ChatRequestParams(
     val formatInstruction: String? = null
 )
 
+data class LlmChatMessage(
+    val role: String,
+    val content: String
+)
+
 /**
  * Клиент для DeepSeek API (OpenAI-совместимый формат).
  */
 class LlmApiClient(
-    private val apiKey: String,
     private val baseUrl: String = "https://api.deepseek.com/v1"
 ) {
     private val client = OkHttpClient.Builder()
@@ -46,21 +44,20 @@ class LlmApiClient(
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun sendPrompt(
-        prompt: String,
-        model: String = "deepseek-chat",
+    suspend fun sendMessages(
+        apiKey: String,
+        messages: List<LlmChatMessage>,
+        model: String,
         params: ChatRequestParams? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val messages = buildList {
-                params?.formatInstruction?.let { instruction ->
-                    add(ChatRequest.ChatRequestMessage(role = "system", content = instruction))
-                }
-                add(ChatRequest.ChatRequestMessage(role = "user", content = prompt))
+            if (messages.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Нет сообщений для отправки"))
             }
+
             val requestBody = ChatRequest(
                 model = model,
-                messages = messages,
+                messages = messages.map { ChatRequest.ChatRequestMessage(role = it.role, content = it.content) },
                 maxTokens = params?.maxTokens,
                 stop = params?.stop,
                 temperature = params?.temperature,
@@ -91,7 +88,7 @@ class LlmApiClient(
                 ?: return@withContext Result.failure(Exception("Пустой ответ от API"))
 
             Timber.d("LlmApi ответ: $content")
-            Result.success(content)
+            Result.success(content.trim())
         } catch (e: Exception) {
             Timber.e(e, "LlmApi исключение")
             Result.failure(e)
