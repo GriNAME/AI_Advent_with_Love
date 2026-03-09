@@ -38,12 +38,6 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
             ChatScreen(
                 chatId = chatId,
                 onBack = { navController.popBackStack() },
-                onOpenChatList = {
-                    navController.navigate(AppDestination.ChatList.route) {
-                        popUpTo(AppDestination.ChatList.route)
-                        launchSingleTop = true
-                    }
-                },
                 onOpenSettings = {
                     navController.navigate(AppDestination.Settings.route)
                 }

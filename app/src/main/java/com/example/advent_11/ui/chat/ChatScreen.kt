@@ -1,5 +1,9 @@
 package com.example.advent_11.ui.chat
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,16 +14,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,9 +40,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -58,7 +68,6 @@ import java.util.Locale
 fun ChatScreen(
     chatId: String,
     onBack: () -> Unit,
-    onOpenChatList: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ChatViewModel = koinViewModel(parameters = { parametersOf(chatId) })
@@ -91,12 +100,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenChatList) {
-                        Icon(
-                            imageVector = Icons.Outlined.Chat,
-                            contentDescription = "Чаты"
-                        )
-                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(
                             imageVector = Icons.Outlined.Settings,
@@ -163,6 +166,8 @@ private fun MessageItem(
 ) {
     val isUserMessage = message.role == MessageRole.USER
     val horizontalAlignment = if (isUserMessage) Alignment.End else Alignment.Start
+    val clipboardManager = LocalClipboardManager.current
+    var showCopyMenu by remember { mutableStateOf(false) }
     val cardColors = if (isUserMessage) {
         CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
     } else {
@@ -175,37 +180,63 @@ private fun MessageItem(
             .padding(horizontal = 16.dp),
         horizontalAlignment = horizontalAlignment
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(if (isUserMessage) 0.9f else 0.95f),
-            colors = cardColors
+        Box(
+            modifier = Modifier.fillMaxWidth(if (isUserMessage) 0.9f else 0.95f)
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = { showCopyMenu = true }
+                    ),
+                colors = cardColors
             ) {
-                val text = when {
-                    message.status == MessageStatus.SENDING -> "ИИ печатает..."
-                    message.content.isNotBlank() -> message.content
-                    else -> message.errorMessage ?: "Сообщение недоступно"
-                }
-                MessageText(
-                    text = text,
-                    enableSelection = message.role == MessageRole.ASSISTANT || message.role == MessageRole.USER
-                )
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val text = when {
+                        message.status == MessageStatus.SENDING -> "ИИ печатает..."
+                        message.content.isNotBlank() -> message.content
+                        else -> message.errorMessage ?: "Сообщение недоступно"
+                    }
+                    MessageText(
+                        text = text,
+                        enableSelection = message.role == MessageRole.ASSISTANT || message.role == MessageRole.USER
+                    )
 
-                if (message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
+                    if (message.status == MessageStatus.ERROR && message.role == MessageRole.ASSISTANT) {
+                        Text(
+                            text = message.errorMessage ?: "Не удалось получить ответ",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        TextButton(onClick = onRetry) {
+                            Text("Повторить")
+                        }
+                    }
+
                     Text(
-                        text = message.errorMessage ?: "Не удалось получить ответ",
+                        text = formatTimestamp(message.createdAt),
                         style = MaterialTheme.typography.bodySmall
                     )
-                    TextButton(onClick = onRetry) {
-                        Text("Повторить")
-                    }
                 }
+            }
 
-                Text(
-                    text = formatTimestamp(message.createdAt),
-                    style = MaterialTheme.typography.bodySmall
+            DropdownMenu(
+                expanded = showCopyMenu,
+                onDismissRequest = { showCopyMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Скопировать") },
+                    onClick = {
+                        val fullMessageText = when {
+                            message.status == MessageStatus.SENDING -> "ИИ печатает..."
+                            message.content.isNotBlank() -> message.content
+                            else -> message.errorMessage ?: "Сообщение недоступно"
+                        }
+                        clipboardManager.setText(AnnotatedString(fullMessageText))
+                        showCopyMenu = false
+                    }
                 )
             }
         }
@@ -217,19 +248,91 @@ private fun MessageText(
     text: String,
     enableSelection: Boolean
 ) {
-    val formattedText = remember(text) { text.toAnnotatedMarkdown() }
-    if (enableSelection) {
-        SelectionContainer {
-            Text(
-                text = formattedText,
-                style = MaterialTheme.typography.bodyLarge
+    val blocks = remember(text) { parseMessageBlocks(text) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is MessageTextBlock -> {
+                    val formattedText = remember(block.text) { block.text.toAnnotatedMarkdown() }
+                    if (enableSelection) {
+                        SelectionContainer {
+                            Text(
+                                text = formattedText,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = formattedText,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+                is MessageTableBlock -> {
+                    MessageTable(block = block)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageTable(block: MessageTableBlock) {
+    val scrollState = rememberScrollState()
+    val columnCount = remember(block) {
+        maxOf(block.headers.size, block.rows.maxOfOrNull { it.size } ?: 0)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scrollState)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        TableRow(
+            cells = block.headers,
+            columnCount = columnCount,
+            isHeader = true
+        )
+        block.rows.forEach { row ->
+            TableRow(
+                cells = row,
+                columnCount = columnCount,
+                isHeader = false
             )
         }
-    } else {
-        Text(
-            text = formattedText,
-            style = MaterialTheme.typography.bodyLarge
-        )
+    }
+}
+
+@Composable
+private fun TableRow(
+    cells: List<String>,
+    columnCount: Int,
+    isHeader: Boolean
+) {
+    Row {
+        repeat(columnCount) { index ->
+            val cellText = cells.getOrNull(index).orEmpty()
+            Box(
+                modifier = Modifier
+                    .widthIn(min = 120.dp)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    .background(
+                        if (isHeader) MaterialTheme.colorScheme.surfaceVariant
+                        else MaterialTheme.colorScheme.surface
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = cellText.toAnnotatedMarkdown(),
+                    style = if (isHeader) {
+                        MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                    } else {
+                        MaterialTheme.typography.bodyMedium
+                    }
+                )
+            }
+        }
     }
 }
 
@@ -364,8 +467,80 @@ private fun String.normalizeMarkdownText(): String = this
     .replace("\\[", "[")
     .replace("\\]", "]")
 
+private fun parseMessageBlocks(text: String): List<MessageBlock> {
+    val normalizedText = text.normalizeMarkdownText()
+    val lines = normalizedText.split("\n")
+    val blocks = mutableListOf<MessageBlock>()
+    val textBuffer = mutableListOf<String>()
+    var index = 0
+
+    fun flushTextBlock() {
+        if (textBuffer.isNotEmpty()) {
+            blocks += MessageTextBlock(textBuffer.joinToString("\n"))
+            textBuffer.clear()
+        }
+    }
+
+    while (index < lines.size) {
+        if (isTableStart(lines, index)) {
+            flushTextBlock()
+            val headers = parseTableRow(lines[index])
+            val rows = mutableListOf<List<String>>()
+            index += 2
+
+            while (index < lines.size && isTableRowLine(lines[index])) {
+                rows += parseTableRow(lines[index])
+                index++
+            }
+
+            if (headers.isNotEmpty() && rows.isNotEmpty()) {
+                blocks += MessageTableBlock(headers = headers, rows = rows)
+            }
+            continue
+        }
+
+        textBuffer += lines[index]
+        index++
+    }
+
+    flushTextBlock()
+    return blocks
+}
+
+private fun isTableStart(lines: List<String>, index: Int): Boolean {
+    if (index + 1 >= lines.size) return false
+    if (!isTableRowLine(lines[index])) return false
+    return TABLE_SEPARATOR_REGEX.matches(lines[index + 1].trim())
+}
+
+private fun isTableRowLine(line: String): Boolean {
+    val trimmedLine = line.trim()
+    if (trimmedLine.isBlank()) return false
+    return trimmedLine.contains("|") && parseTableRow(trimmedLine).size >= 2
+}
+
+private fun parseTableRow(line: String): List<String> =
+    line
+        .trim()
+        .removePrefix("|")
+        .removeSuffix("|")
+        .split("|")
+        .map { it.trim() }
+
 private val HEADING_REGEX = Regex("^(#{1,6})\\s*")
 private val INLINE_STYLE_REGEX = Regex("\\*\\*(.+?)\\*\\*|\\*(.+?)\\*")
+private val TABLE_SEPARATOR_REGEX = Regex("^\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?$")
+
+private sealed interface MessageBlock
+
+private data class MessageTextBlock(
+    val text: String
+) : MessageBlock
+
+private data class MessageTableBlock(
+    val headers: List<String>,
+    val rows: List<List<String>>
+) : MessageBlock
 
 private fun formatTimestamp(timestamp: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
